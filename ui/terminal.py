@@ -379,7 +379,73 @@ class ScanUI:
 
         print(f"  {Colors.DIM}{'─' * w}{Colors.RESET}")
 
-    def render_finding(self, finding: dict, index: int):
+    def render_fix_proposal(self, proposal, index: int):
+        """Render an AI fix proposal block below a finding"""
+        w = self.W
+
+        print(f"\n  {Colors.GREEN}{'─' * w}{Colors.RESET}")
+        print(
+            f"  {Colors.GREEN}{Colors.BOLD}FIX PROPOSAL{Colors.RESET}  "
+            f"{Colors.DIM}│{Colors.RESET}  "
+            f"{Colors.WHITE}{proposal.get('summary', 'N/A')}{Colors.RESET}"
+        )
+        print(f"  {Colors.GREEN}{'─' * w}{Colors.RESET}")
+
+        # Priority & Effort
+        priority = proposal.get("priority", "short_term")
+        effort = proposal.get("effort", "hours")
+        priority_display = {"immediate": "IMMEDIATE", "short_term": "Short-term", "long_term": "Long-term"}.get(priority, priority)
+        print(
+            f"  {Colors.BOLD}Priority{Colors.RESET} {Colors.DIM}{priority_display}{Colors.RESET}  "
+            f"{Colors.DIM}│{Colors.RESET}  "
+            f"{Colors.BOLD}Effort{Colors.RESET} {Colors.DIM}{effort}{Colors.RESET}"
+        )
+
+        # Config changes
+        config_changes = proposal.get("config_changes", [])
+        if config_changes:
+            print(f"\n  {Colors.BOLD}Config Changes:{Colors.RESET}")
+            for cc in config_changes[:3]:
+                cc_file = cc.get("file", "")
+                cc_desc = cc.get("description", "")
+                if cc_file:
+                    print(f"  {Colors.GREEN}{cc_file}{Colors.RESET} {Colors.DIM}{cc_desc}{Colors.RESET}")
+                content = cc.get("content", "")
+                if content:
+                    for content_line in str(content).split("\n")[:5]:
+                        print(f"    {Colors.GREEN}{content_line[:70]}{Colors.RESET}")
+
+        # Code snippets
+        code_snippets = proposal.get("code_snippets", [])
+        if code_snippets:
+            print(f"\n  {Colors.BOLD}Code Patches:{Colors.RESET}")
+            for cs in code_snippets[:3]:
+                cs_file = cs.get("filename", "")
+                cs_lang = cs.get("language", "")
+                cs_desc = cs.get("description", "")
+                label = f"{cs_file}" if cs_file else cs_lang
+                if label:
+                    print(f"  {Colors.GREEN}{label}{Colors.RESET} {Colors.DIM}{cs_desc}{Colors.RESET}")
+                code = cs.get("code", "")
+                if code:
+                    for code_line in str(code).split("\n")[:6]:
+                        print(f"    {Colors.GREEN}{code_line[:70]}{Colors.RESET}")
+
+        # Commands
+        commands = proposal.get("commands", [])
+        if commands:
+            print(f"\n  {Colors.BOLD}Commands:{Colors.RESET}")
+            for cmd in commands[:5]:
+                print(f"    {Colors.GREEN}$ {cmd[:70]}{Colors.RESET}")
+
+        # Verify steps
+        verify_steps = proposal.get("verify_steps", [])
+        if verify_steps:
+            print(f"\n  {Colors.BOLD}Verify:{Colors.RESET}")
+            for step in verify_steps[:4]:
+                print(f"    {Colors.DIM}{step[:70]}{Colors.RESET}")
+
+    def render_finding(self, finding: dict, index: int, fix_proposal: dict = None):
         """Render a single finding in detail"""
         sev = finding.get("severity", "INFO")
         color = SEVERITY_COLORS.get(sev, Colors.DIM)
@@ -439,6 +505,10 @@ class ScanUI:
             for poc_line in poc.split('\n')[:3]:
                 print(f"    {Colors.GREEN}{poc_line[:72]}{Colors.RESET}")
 
+        # Fix proposal (if available)
+        if fix_proposal:
+            self.render_fix_proposal(fix_proposal, index)
+
     # ── Phase display (extensive mode) ────────────────────────────────
 
     PHASE_COLORS = {
@@ -481,8 +551,8 @@ class ScanUI:
 
     # ── Findings rendering ─────────────────────────────────────────────
 
-    def render_all_findings(self):
-        """Render all findings sorted by severity"""
+    def render_all_findings(self, fix_proposals: dict = None):
+        """Render all findings sorted by severity, with optional fix proposals"""
         sorted_findings = sorted(
             self.findings,
             key=lambda f: ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"].index(
@@ -490,7 +560,10 @@ class ScanUI:
             ),
         )
         for i, f in enumerate(sorted_findings, 1):
-            self.render_finding(f, i)
+            fp = None
+            if fix_proposals:
+                fp = fix_proposals.get(f.get("fingerprint"))
+            self.render_finding(f, i, fix_proposal=fp)
 
 
 # ─── Standalone helpers ──────────────────────────────────────────────────────

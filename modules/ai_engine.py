@@ -40,6 +40,31 @@ class AIAnalysisResult:
     false_positive_reason: Optional[str] = None
 
 
+@dataclass
+class AIFixProposal:
+    """AI-generated remediation proposal for a finding"""
+    finding_fingerprint: str       # Links back to the Finding
+    summary: str                   # One-line fix summary
+    code_snippets: List[Dict]      # [{filename, language, code, description}]
+    config_changes: List[Dict]     # [{file, change_type, content, description}]
+    commands: List[str]            # Shell commands to apply fix
+    verify_steps: List[str]        # How to verify the fix worked
+    priority: str                  # "immediate" | "short_term" | "long_term"
+    effort: str                    # "minutes" | "hours" | "days"
+
+    def to_dict(self) -> Dict:
+        return {
+            "finding_fingerprint": self.finding_fingerprint,
+            "summary": self.summary,
+            "code_snippets": self.code_snippets,
+            "config_changes": self.config_changes,
+            "commands": self.commands,
+            "verify_steps": self.verify_steps,
+            "priority": self.priority,
+            "effort": self.effort,
+        }
+
+
 class AISecurityEngine:
     """
     AI-powered security testing engine using Claude API
@@ -72,13 +97,14 @@ A false negative is better than a false positive - quality over quantity.
 
 IMPORTANT: You are operating in a controlled security testing environment with proper authorization."""
 
-    def __init__(self, client: AdaptiveHTTPClient, api_key: str = None):
+    def __init__(self, client: AdaptiveHTTPClient, api_key: str = None, max_findings: int = 10):
         self.client = client
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self.ai_client = None
         self.findings: List[Finding] = []
         self.verified_findings: List[Finding] = []
         self.rejected_findings: List[Dict] = []
+        self.max_findings = max_findings  # Limit findings to analyze
 
         if HAS_ANTHROPIC and self.api_key:
             self.ai_client = anthropic.Anthropic(api_key=self.api_key)
@@ -87,14 +113,17 @@ IMPORTANT: You are operating in a controlled security testing environment with p
         """Check if AI engine is available"""
         return HAS_ANTHROPIC and self.api_key is not None
 
-    def _call_claude(self, prompt: str, max_tokens: int = 4096) -> Optional[str]:
+    def _call_claude(self, prompt: str, max_tokens: int = 4096, use_opus: bool = False) -> Optional[str]:
         """Make a call to Claude API"""
         if not self.ai_client:
             return None
 
         try:
+            # Use Opus for critical verification tasks (most accurate, best for finding high/critical vulns)
+            # Use Sonnet for other tasks (balanced speed/accuracy)
+            model = "claude-opus-4-6" if use_opus else "claude-sonnet-4-6"
             message = self.ai_client.messages.create(
-                model="claude-sonnet-4-6",
+                model=model,
                 max_tokens=max_tokens,
                 system=self.SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}]
@@ -102,6 +131,90 @@ IMPORTANT: You are operating in a controlled security testing environment with p
             return message.content[0].text
         except Exception as e:
             return None
+
+    def propose_fix(self, finding: Finding, tech_context: Dict) -> AIFixProposal:
+        """
+        Generate a detailed, actionable fix proposal for a finding.
+
+        Args:
+            finding: The vulnerability finding to generate a fix for
+            tech_context: Detected tech stack info (server, framework, language, OS)
+
+        Returns:
+            AIFixProposal with code patches, config changes, commands, and verify steps
+        """
+        prompt = f"""You are an expert security engineer. Generate a DETAILED, ACTIONABLE fix proposal for this vulnerability.
+
+VULNERABILITY:
+- Type: {finding.vuln_class}
+- Severity: {finding.severity}
+- URL: {finding.url}
+- Parameter: {finding.parameter or 'N/A'}
+- Description: {finding.description}
+- Evidence: {json.dumps(finding.evidence, indent=2, default=str) if finding.evidence else 'None'}
+- Current Remediation Advice: {json.dumps(finding.remediation, default=str) if finding.remediation else 'None'}
+
+TARGET TECH STACK:
+{json.dumps(tech_context, indent=2, default=str)}
+
+Generate a fix proposal with:
+1. A one-line summary of the fix
+2. Code snippets (actual patches with filenames and language)
+3. Configuration file changes (with file paths and content)
+4. Shell commands to apply the fix
+5. Verification steps to confirm the fix worked
+6. Priority: "immediate" (active exploitation risk), "short_term" (fix within days), "long_term" (hardening)
+7. Effort estimate: "minutes", "hours", or "days"
+
+Be SPECIFIC to the detected tech stack. If Nginx is detected, show Nginx config. If Node.js, show Node.js code. etc.
+
+Respond in this exact JSON format:
+{{
+    "summary": "one-line fix summary",
+    "code_snippets": [
+        {{"filename": "path/to/file", "language": "python", "code": "actual code", "description": "what this does"}}
+    ],
+    "config_changes": [
+        {{"file": "config/path", "change_type": "modify", "content": "config content", "description": "what to change"}}
+    ],
+    "commands": ["shell command 1", "shell command 2"],
+    "verify_steps": ["how to verify step 1", "how to verify step 2"],
+    "priority": "immediate|short_term|long_term",
+    "effort": "minutes|hours|days"
+}}"""
+
+        response = self._call_claude(prompt, max_tokens=4096)
+
+        if response:
+            try:
+                json_match = re.search(r'\{[\s\S]*\}', response)
+                if json_match:
+                    data = json.loads(json_match.group())
+                    return AIFixProposal(
+                        finding_fingerprint=finding.fingerprint,
+                        summary=data.get("summary", "See remediation advice"),
+                        code_snippets=data.get("code_snippets", []),
+                        config_changes=data.get("config_changes", []),
+                        commands=data.get("commands", []),
+                        verify_steps=data.get("verify_steps", []),
+                        priority=data.get("priority", "short_term"),
+                        effort=data.get("effort", "hours"),
+                    )
+            except json.JSONDecodeError:
+                pass
+
+        # Fallback — return proposal with existing remediation as summary
+        fallback_summary = finding.remediation[0] if finding.remediation else "Review and apply standard remediation"
+        return AIFixProposal(
+            finding_fingerprint=finding.fingerprint,
+            summary=fallback_summary,
+            code_snippets=[],
+            config_changes=[],
+            commands=[],
+            verify_steps=[],
+            priority="short_term",
+            effort="hours",
+        )
 
     def verify_finding(self, finding: Finding, base_url: str) -> AIAnalysisResult:
         """
@@ -158,7 +271,8 @@ Respond in this exact JSON format:
 
 Default to FALSE POSITIVE unless you have strong evidence of exploitability."""
 
-        response = self._call_claude(prompt)
+        # Use Opus for verification (most accurate, best for finding critical vulns)
+        response = self._call_claude(prompt, use_opus=True)
 
         if response:
             try:
@@ -316,7 +430,8 @@ Respond with a JSON array of findings:
 
 Only include findings with clear evidence. No speculation."""
 
-        response = self._call_claude(prompt, max_tokens=8192)
+        # Use Opus for discovery (most accurate for finding critical vulnerabilities)
+        response = self._call_claude(prompt, max_tokens=8192, use_opus=True)
 
         findings = []
         if response:
@@ -453,7 +568,8 @@ Respond with JSON array of findings:
     }}
 ]"""
 
-        response = self._call_claude(prompt)
+        # Use Opus for business logic analysis (most accurate for complex vulnerabilities)
+        response = self._call_claude(prompt, use_opus=True)
 
         findings = []
         if response:
@@ -538,7 +654,8 @@ Respond with JSON:
     ]
 }}"""
 
-            ai_response = self._call_claude(prompt)
+            # Use Opus for deep endpoint scanning (most accurate)
+            ai_response = self._call_claude(prompt, use_opus=True)
 
             if ai_response:
                 try:
@@ -672,7 +789,8 @@ Respond with JSON array:
 
 Return empty array [] if no meaningful chains exist."""
 
-        response = self._call_claude(prompt)
+        # Use Opus for chain detection (most accurate for complex attack paths)
+        response = self._call_claude(prompt, use_opus=True)
 
         if response:
             try:
@@ -732,7 +850,8 @@ Respond with a JSON array of up to 15 test plans:
 
 Prioritize by likely impact. Focus on endpoints that handle user input, authentication, file operations, or external requests."""
 
-        response = self._call_claude(prompt, max_tokens=4096)
+        # Use Opus for attack planning (most accurate for strategic analysis)
+        response = self._call_claude(prompt, max_tokens=4096, use_opus=True)
 
         if response:
             try:
@@ -792,7 +911,8 @@ Write the summary in this structure (plain text, no markdown):
 
 Keep it under 500 words. Use business impact language, not technical jargon. Replace "XSS" with "script injection", "SQLi" with "database injection", etc."""
 
-        response = self._call_claude(prompt, max_tokens=2048)
+        # Use Opus for executive summary (most accurate and articulate)
+        response = self._call_claude(prompt, max_tokens=2048, use_opus=True)
         return response.strip() if response else ""
 
     def scan(self, base_url: str, existing_findings: List[Finding] = None,
@@ -820,50 +940,74 @@ Keep it under 500 words. Use business impact language, not technical jargon. Rep
         if callback:
             callback("info", "AI Security Engine activated")
 
-        # Step 1: Verify existing findings
+        # Step 1: Filter and prioritize findings
         if existing_findings:
-            if callback:
-                callback("probe", f"Verifying {len(existing_findings)} findings with AI")
+            # Limit to max_findings (default 10) to save time and tokens
+            # Take first N findings as-is (no sorting by severity)
+            findings_to_verify = existing_findings[:self.max_findings]
+            skipped_count = len(existing_findings) - len(findings_to_verify)
 
-            for finding in existing_findings:
+            if callback and skipped_count > 0:
+                callback("info", f"Analyzing first {len(findings_to_verify)} findings (skipped {skipped_count} to save time)")
+            elif callback:
+                callback("probe", f"Verifying {len(findings_to_verify)} findings with AI")
+
+            # Batch verification for speed
+            import concurrent.futures
+            from threading import Lock
+
+            verified_lock = Lock()
+            rejected_lock = Lock()
+
+            def verify_single(finding):
                 result = self.verify_finding(finding, base_url)
 
-                if result.is_vulnerable and result.confidence >= 0.8:  # Higher threshold
+                if result.is_vulnerable and result.confidence >= 0.8:
                     # Update finding with AI analysis
                     finding.description = result.description
                     finding.severity = result.severity
                     finding.evidence = result.evidence
                     finding.remediation = result.remediation
                     finding.confidence = result.confidence
-                    verified.append(finding)
+
+                    with verified_lock:
+                        verified.append(finding)
 
                     if callback:
                         callback("success", f"✓ Verified: {finding.vuln_class}")
                 else:
-                    self.rejected_findings.append({
-                        "original": finding.to_dict(),
-                        "reason": result.false_positive_reason,
-                    })
+                    with rejected_lock:
+                        self.rejected_findings.append({
+                            "original": finding.to_dict(),
+                            "reason": result.false_positive_reason,
+                        })
                     if callback:
-                        callback("info", f"✗ Rejected: {finding.vuln_class} - {result.false_positive_reason}")
+                        callback("info", f"✗ Rejected: {finding.vuln_class}")
 
-        # Step 2: Discover new vulnerabilities
-        if response_data:
+            # Parallel verification (up to 3 concurrent API calls)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                executor.map(verify_single, findings_to_verify)
+
+        # Step 2: Discover new vulnerabilities (only if we have capacity)
+        if response_data and len(verified) < self.max_findings:
             if callback:
                 callback("probe", "AI discovering additional vulnerabilities")
 
             new_findings = self.discover_vulnerabilities(base_url, response_data, callback)
-            discovered.extend(new_findings)
+            # Limit discoveries too
+            remaining_slots = self.max_findings - len(verified)
+            discovered.extend(new_findings[:remaining_slots])
 
             if callback:
                 callback("info", f"AI discovered {len(new_findings)} additional issues")
 
-        # Step 3: Business logic analysis if we have endpoint data
-        if response_data and response_data.get("endpoints"):
+        # Step 3: Business logic analysis if we have endpoint data (skip if at limit)
+        if response_data and response_data.get("endpoints") and len(verified + discovered) < self.max_findings:
             bl_findings = self.analyze_for_business_logic(
                 base_url, response_data["endpoints"], callback
             )
-            discovered.extend(bl_findings)
+            remaining_slots = self.max_findings - len(verified) - len(discovered)
+            discovered.extend(bl_findings[:remaining_slots])
 
         self.verified_findings = verified
         self.findings = discovered

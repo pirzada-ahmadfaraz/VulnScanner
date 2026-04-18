@@ -589,6 +589,138 @@ section { padding: 2rem 0; }
   margin-bottom: .75rem;
 }
 
+/* ---- Fix Proposals ---- */
+.fix-proposal {
+  margin-top: 1rem;
+  border: 1px solid rgba(63,185,80,.25);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.fix-toggle {
+  width: 100%;
+  background: rgba(63,185,80,.06);
+  border: none;
+  padding: .85rem 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  cursor: pointer;
+  color: var(--accent-green);
+  font-size: .9rem;
+  font-weight: 600;
+  font-family: inherit;
+  text-align: left;
+  transition: background var(--transition);
+}
+.fix-toggle:hover {
+  background: rgba(63,185,80,.12);
+}
+.fix-toggle .fix-arrow {
+  transition: transform .2s ease;
+  font-size: .7rem;
+}
+.fix-proposal.open .fix-toggle .fix-arrow {
+  transform: rotate(90deg);
+}
+.fix-body {
+  display: none;
+  padding: 1.1rem;
+  background: rgba(63,185,80,.03);
+}
+.fix-proposal.open .fix-body {
+  display: block;
+}
+.fix-meta {
+  display: flex;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.fix-meta-item {
+  font-size: .8rem;
+}
+.fix-meta-item .fm-label {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  font-size: .7rem;
+  font-weight: 600;
+}
+.fix-meta-item .fm-value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.fix-section {
+  margin-bottom: .85rem;
+}
+.fix-section:last-child {
+  margin-bottom: 0;
+}
+.fix-section-label {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--accent-green);
+  margin-bottom: .35rem;
+  font-weight: 700;
+}
+.fix-code-block {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .75rem 1rem;
+  margin-bottom: .5rem;
+}
+.fix-code-block .fcb-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: .4rem;
+}
+.fix-code-block .fcb-file {
+  font-size: .78rem;
+  color: var(--accent-brand);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-weight: 600;
+}
+.fix-code-block .fcb-lang {
+  font-size: .7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.fix-code-block pre {
+  margin: 0;
+  padding: .5rem;
+  font-size: .8rem;
+  border: none;
+  background: transparent;
+}
+.fix-cmd {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: .82rem;
+  color: var(--accent-green);
+  padding: .2rem 0;
+}
+.fix-cmd::before {
+  content: "$ ";
+  color: var(--text-muted);
+}
+.fix-verify-step {
+  font-size: .85rem;
+  color: var(--text-secondary);
+  padding: .15rem 0 .15rem 1.1rem;
+  position: relative;
+}
+.fix-verify-step::before {
+  content: "\2713";
+  position: absolute;
+  left: 0;
+  color: var(--accent-green);
+  font-weight: 700;
+  font-size: .8rem;
+}
+
 /* ---- Responsive ---- */
 @media (max-width: 700px) {
   .meta-grid { grid-template-columns: 1fr; }
@@ -971,6 +1103,79 @@ section { padding: 2rem 0; }
         {% for tag in f.tags %}
         <span class="tag">{{ tag }}</span>
         {% endfor %}
+      </div>
+      {% endif %}
+
+      {# Fix Proposal #}
+      {% if fix_proposals and f.fingerprint in fix_proposals %}
+      {% set fp = fix_proposals[f.fingerprint] %}
+      <div class="fix-proposal" id="fix-{{ loop.index }}">
+        <button class="fix-toggle" onclick="this.parentElement.classList.toggle('open')">
+          <span class="fix-arrow">&#9654;</span>
+          &#128295; Fix Proposal: {{ fp.summary }}
+        </button>
+        <div class="fix-body">
+          <div class="fix-meta">
+            <div class="fix-meta-item">
+              <div class="fm-label">Priority</div>
+              <div class="fm-value">{{ fp.priority }}</div>
+            </div>
+            <div class="fix-meta-item">
+              <div class="fm-label">Effort</div>
+              <div class="fm-value">{{ fp.effort }}</div>
+            </div>
+          </div>
+
+          {% if fp.config_changes %}
+          <div class="fix-section">
+            <div class="fix-section-label">Config Changes</div>
+            {% for cc in fp.config_changes %}
+            <div class="fix-code-block">
+              <div class="fcb-header">
+                <span class="fcb-file">{{ cc.file }}</span>
+                <span class="fcb-lang">{{ cc.change_type }}</span>
+              </div>
+              {% if cc.description %}<div style="font-size:.8rem;color:var(--text-secondary);margin-bottom:.3rem;">{{ cc.description }}</div>{% endif %}
+              <pre>{{ cc.content }}</pre>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if fp.code_snippets %}
+          <div class="fix-section">
+            <div class="fix-section-label">Code Patches</div>
+            {% for cs in fp.code_snippets %}
+            <div class="fix-code-block">
+              <div class="fcb-header">
+                <span class="fcb-file">{{ cs.filename }}</span>
+                <span class="fcb-lang">{{ cs.language }}</span>
+              </div>
+              {% if cs.description %}<div style="font-size:.8rem;color:var(--text-secondary);margin-bottom:.3rem;">{{ cs.description }}</div>{% endif %}
+              <pre>{{ cs.code }}</pre>
+            </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if fp.commands %}
+          <div class="fix-section">
+            <div class="fix-section-label">Commands</div>
+            {% for cmd in fp.commands %}
+            <div class="fix-cmd">{{ cmd }}</div>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          {% if fp.verify_steps %}
+          <div class="fix-section">
+            <div class="fix-section-label">Verification</div>
+            {% for step in fp.verify_steps %}
+            <div class="fix-verify-step">{{ step }}</div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
       </div>
       {% endif %}
 

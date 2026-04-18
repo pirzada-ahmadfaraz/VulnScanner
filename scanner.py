@@ -30,7 +30,7 @@ from .ui.terminal import (
     ScanUI, ModuleProgress, Colors, print_scan_complete, BANNER
 )
 
-# Import all scanner modules (16 total)
+# Import all scanner modules (17 total)
 from .modules.info_disclosure import InfoDisclosureScanner
 from .modules.security_headers import SecurityHeadersScanner
 from .modules.auth_scanner import AuthScanner
@@ -47,7 +47,8 @@ from .modules.cors_scanner import CORSScanner
 from .modules.waf_bypass import WAFBypassScanner
 from .modules.api_scanner import APIScanner
 from .modules.crawler import WebCrawler
-from .modules.ai_engine import AISecurityEngine
+from .modules.ai_engine import AISecurityEngine, AIFixProposal
+from .modules.idor_scanner import IDORScanner
 
 
 SCAN_PROFILES = {
@@ -58,12 +59,12 @@ SCAN_PROFILES = {
     'web': {
         'description': 'Web vulnerability focus - skip infrastructure',
         'modules': ['tech', 'headers', 'info', 'auth', 'injection', 'xss',
-                    'ssrf', 'redirect', 'cors', 'api', 'crawl'],
+                    'ssrf', 'redirect', 'cors', 'api', 'idor', 'crawl'],
     },
     'full': {
         'description': 'All modules including heavy scans',
         'modules': ['tech', 'headers', 'info', 'auth', 'injection', 'xss',
-                    'ssrf', 'redirect', 'ssl', 'cors', 'waf', 'api', 'crawl', 'dirs', 'ports'],
+                    'ssrf', 'redirect', 'ssl', 'cors', 'waf', 'api', 'idor', 'crawl', 'dirs', 'ports'],
     },
     'stealth': {
         'description': 'Passive only - no active probes',
@@ -76,7 +77,8 @@ class VulnScanner:
     """Main vulnerability scanner orchestrator with real-time output"""
 
     def __init__(self, proxy: str = None, timeout: int = 15, ai_api_key: str = None,
-                 cookies: dict = None, auth_headers: dict = None, safety: SafetyConfig = None):
+                 cookies: dict = None, auth_headers: dict = None, safety: SafetyConfig = None,
+                 max_ai_findings: int = 10):
         self.proxy = proxy
         self.timeout = timeout
         self.safety = safety
@@ -97,9 +99,11 @@ class VulnScanner:
         self.ai_rejected_findings: List[Dict] = []
         self.ai_chains: List[Dict] = []
         self.response_data: Dict = {}  # Collected data for AI analysis
+        self.fix_proposals: List[AIFixProposal] = []
         self._seen_endpoints = set()
         self._crawl_enabled = False
         self._crawl_depth = 3
+        self.max_ai_findings = max_ai_findings  # Limit AI analysis to top N findings
 
     def recon(self, domain: str, callback=None) -> List[Dict]:
         """
@@ -189,7 +193,8 @@ class VulnScanner:
         return self.discovered_subdomains
 
     def scan(self, target: str, modules: List[str] = None, quiet: bool = False,
-             recon_mode: bool = False, ai_mode: bool = False) -> List[Finding]:
+             recon_mode: bool = False, ai_mode: bool = False,
+             fix_mode: bool = False) -> List[Finding]:
         """
         Run full vulnerability scan against target with real-time output
 
@@ -205,6 +210,7 @@ class VulnScanner:
         """
         start_time = time.time()
         self.findings = []
+        self.fix_proposals = []
         self.ai_engine = None
         self.ai_enabled = False
         self.ai_verified_findings = []
@@ -214,9 +220,13 @@ class VulnScanner:
         self.response_data = {"endpoints": [], "responses": [], "technologies": []}
         self._seen_endpoints = set()
 
+        # Fix mode requires AI engine
+        if fix_mode and not ai_mode:
+            ai_mode = True
+
         # Initialize AI engine if requested
         if ai_mode:
-            candidate_ai_engine = AISecurityEngine(self.client, self.ai_api_key)
+            candidate_ai_engine = AISecurityEngine(self.client, self.ai_api_key, max_findings=self.max_ai_findings)
             if not candidate_ai_engine.is_available():
                 if not quiet:
                     print(f"\n  {Colors.YELLOW}\u26a0 AI mode requested but ANTHROPIC_API_KEY not set{Colors.RESET}")
@@ -254,7 +264,7 @@ class VulnScanner:
         if modules is None:
             # Default modules (skip heavy ones like ports/dirs for speed)
             modules_to_run = ['tech', 'headers', 'info', 'auth', 'injection',
-                              'xss', 'ssrf', 'redirect', 'ssl', 'cors', 'waf', 'api']
+                              'xss', 'ssrf', 'redirect', 'ssl', 'cors', 'waf', 'api', 'idor']
         else:
             modules_to_run = [m for m in modules if m in available_modules]
 
@@ -411,6 +421,10 @@ class VulnScanner:
         self.findings = deduplicate_findings(self.findings)
         self.findings = sort_findings(self.findings)
 
+        # Fix proposals phase (runs after all findings are collected)
+        if fix_mode and self.ai_engine and self.ai_engine.is_available():
+            self._run_fix_proposals(profile, quiet=quiet)
+
         elapsed = time.time() - start_time
 
         # Count severities
@@ -420,8 +434,9 @@ class VulnScanner:
         low = sum(1 for f in self.findings if f.severity == 'LOW')
 
         if not quiet:
+            fix_dict = self._get_fix_proposals_dict() if self.fix_proposals else None
             self.ui.render_findings_summary()
-            self.ui.render_all_findings()
+            self.ui.render_all_findings(fix_proposals=fix_dict)
             print_scan_complete(elapsed, len(self.findings), critical, high)
 
         # Safety stats (minimal)
@@ -503,6 +518,7 @@ class VulnScanner:
                 "rejected_findings": self.ai_rejected_findings,
                 "chains": self.ai_chains,
             } if self.ai_engine else None,
+            "fix_proposals": [p.to_dict() for p in self.fix_proposals] if self.fix_proposals else [],
             "findings": [],
         }
 
@@ -534,6 +550,85 @@ class VulnScanner:
             return filepath
         except Exception as e:
             return None
+
+    def _run_fix_proposals(self, profile, quiet: bool = False):
+        """Generate AI fix proposals for all non-INFO findings."""
+        if not self.ai_engine or not self.ai_engine.is_available():
+            return
+
+        # Filter findings: skip INFO severity, limit to max_ai_findings
+        fixable = [f for f in self.findings if f.severity != "INFO"]
+        if not fixable:
+            return
+
+        # Limit to max_ai_findings to save time and tokens
+        if len(fixable) > self.max_ai_findings:
+            fixable = fixable[:self.max_ai_findings]
+            if not quiet:
+                print(f"  {Colors.DIM}Generating fixes for top {self.max_ai_findings} findings{Colors.RESET}")
+
+        # Build tech context from profile
+        tech_context = {}
+        if profile:
+            if hasattr(profile, 'technologies') and profile.technologies:
+                tech_context["technologies"] = [
+                    {"name": t.name, "version": t.version}
+                    for t in profile.technologies
+                ]
+            if hasattr(profile, 'waf_detected') and profile.waf_detected:
+                tech_context["waf"] = profile.waf_detected
+            if hasattr(profile, 'server_os') and profile.server_os:
+                tech_context["server_os"] = profile.server_os
+
+        if not quiet:
+            w = self.ui.W
+            print(f"\n  {Colors.GREEN}{'━' * w}{Colors.RESET}")
+            print(
+                f"  {Colors.GREEN}{Colors.BOLD}AI FIX PROPOSALS{Colors.RESET}  "
+                f"{Colors.DIM}│{Colors.RESET}  "
+                f"{Colors.WHITE}Generating solutions for {len(fixable)} findings{Colors.RESET}"
+            )
+            print(f"  {Colors.GREEN}{'━' * w}{Colors.RESET}")
+
+        from .ui.terminal import ProgressBar
+        fix_bar = ProgressBar(len(fixable), "Fixing", color=Colors.GREEN)
+        if not quiet:
+            fix_bar.update("Initializing...")
+
+        sys.stdout.write(Colors.HIDE_CURSOR)
+        sys.stdout.flush()
+
+        self.fix_proposals = []
+
+        # Parallel fix generation for speed
+        import concurrent.futures
+        from threading import Lock
+
+        proposals_lock = Lock()
+
+        def generate_fix(finding):
+            proposal = self.ai_engine.propose_fix(finding, tech_context)
+            with proposals_lock:
+                self.fix_proposals.append(proposal)
+            if not quiet:
+                fix_bar.advance(finding.vuln_class[:28])
+
+        # Use ThreadPoolExecutor for parallel fix generation (up to 3 concurrent)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            executor.map(generate_fix, fixable)
+
+        if not quiet:
+            fix_bar.finish(f"{len(self.fix_proposals)} proposals")
+
+        sys.stdout.write(Colors.SHOW_CURSOR)
+        sys.stdout.flush()
+
+    def _get_fix_proposals_dict(self) -> Dict:
+        """Return fix proposals keyed by finding fingerprint for rendering."""
+        result = {}
+        for p in self.fix_proposals:
+            result[p.finding_fingerprint] = p.to_dict()
+        return result
 
     def _run_module_with_activity(self, name: str, scanner_class, base_url: str,
                                    progress: ModuleProgress, activities: List[tuple],
@@ -577,7 +672,8 @@ class VulnScanner:
             progress.error(str(e)[:50])
             return []
 
-    def save_html_report(self, target: str, elapsed: float, profile, chains: list = None) -> str:
+    def save_html_report(self, target: str, elapsed: float, profile, chains: list = None,
+                         fix_proposals: list = None) -> str:
         """Generate HTML report from scan findings"""
         template_path = os.path.join(os.path.dirname(__file__), 'templates', 'report.html')
         if not os.path.exists(template_path):
@@ -628,12 +724,18 @@ class VulnScanner:
         try:
             from jinja2 import Template
             tmpl = Template(template_str)
+            # Build fix proposals dict keyed by fingerprint
+            fix_dict = {}
+            for p in (fix_proposals or []):
+                fp = p.to_dict() if hasattr(p, 'to_dict') else p
+                fix_dict[fp.get("finding_fingerprint", "")] = fp
             html = tmpl.render(
                 scan_info=scan_info,
                 target_profile=target_profile,
                 findings=findings_list,
                 ai_analysis=ai_analysis,
                 chains=chains or [],
+                fix_proposals=fix_dict,
             )
         except ImportError:
             # Fallback: basic string replacement for key values
@@ -779,6 +881,12 @@ class VulnScanner:
                 ("Testing rate limits", "Brute force protection"),
                 ("Checking BOLA patterns", "IDOR susceptibility"),
             ]),
+            'idor': ('IDOR Scanner', IDORScanner, [
+                ("Testing sequential IDs", "User enumeration"),
+                ("Testing file access", "Document IDOR"),
+                ("Testing API endpoints", "Object reference"),
+                ("Checking sensitive files", "Aadhaar/PAN/Passport exposure"),
+            ]),
             'crawl': ('Web Crawler', WebCrawler, [
                 ("Crawling pages", "Link extraction"),
                 ("Parsing forms", "Input discovery"),
@@ -789,7 +897,7 @@ class VulnScanner:
 
     # ── Extensive scan mode ──────────────────────────────────────────────
 
-    def extensive_scan(self, target: str) -> List[Finding]:
+    def extensive_scan(self, target: str, fix_mode: bool = False) -> List[Finding]:
         """
         AI-guided full attack lifecycle: recon → surface mapping →
         full scanning → AI deep analysis → executive summary.
@@ -804,6 +912,7 @@ class VulnScanner:
         """
         start_time = time.time()
         self.findings = []
+        self.fix_proposals = []
         self.ai_verified_findings = []
         self.ai_discovered_findings = []
         self.ai_rejected_findings = []
@@ -812,7 +921,7 @@ class VulnScanner:
         self._seen_endpoints = set()
 
         # Initialize AI engine (required for extensive mode)
-        self.ai_engine = AISecurityEngine(self.client, self.ai_api_key)
+        self.ai_engine = AISecurityEngine(self.client, self.ai_api_key, max_findings=self.max_ai_findings)
         self.ai_enabled = True
 
         # Normalize target
@@ -1069,6 +1178,10 @@ class VulnScanner:
 
         # ── Phase 5: REPORTING ───────────────────────────────────────
 
+        # Fix proposals (before report generation)
+        if fix_mode and self.ai_engine and self.ai_engine.is_available():
+            self._run_fix_proposals(profile=None, quiet=False)
+
         self.ui.print_phase_header(5, "REPORTING")
 
         elapsed = time.time() - start_time
@@ -1101,7 +1214,8 @@ class VulnScanner:
             attack_plans, summary_text, profile=None
         )
         html_path = self.save_html_report(
-            target, elapsed, profile=None, chains=self.ai_chains
+            target, elapsed, profile=None, chains=self.ai_chains,
+            fix_proposals=self.fix_proposals,
         )
 
         self.ui.print_phase_stat("JSON report", report_path or "failed")
@@ -1109,8 +1223,9 @@ class VulnScanner:
         self.ui.print_phase_footer()
 
         # Print findings
+        fix_dict = self._get_fix_proposals_dict() if self.fix_proposals else None
         self.ui.render_findings_summary()
-        self.ui.render_all_findings()
+        self.ui.render_all_findings(fix_proposals=fix_dict)
 
         critical = sum(1 for f in self.findings if f.severity == 'CRITICAL')
         high = sum(1 for f in self.findings if f.severity == 'HIGH')
@@ -1161,6 +1276,7 @@ class VulnScanner:
                 "chains": self.ai_chains,
             },
             "executive_summary": summary_text,
+            "fix_proposals": [p.to_dict() for p in self.fix_proposals] if self.fix_proposals else [],
             "findings": [
                 f.to_dict() if isinstance(f, Finding) else f
                 for f in self.findings
@@ -1198,6 +1314,7 @@ def main():
   vulnscan https://target.com --safe-mode              # No destructive payloads
   vulnscan https://target.com --scope target.com,api.target.com
   vulnscan https://target.com --extensive --ai-key KEY  # AI-guided full lifecycle
+  vulnscan https://target.com --fix --ai-key KEY       # AI fix proposals for findings
   vulnscan https://target.com --report-html   # Generate HTML report
   vulnscan https://target.com --output report.json
   vulnscan https://target.com --cookie "session=abc123"
@@ -1205,7 +1322,7 @@ def main():
   vulnscan https://target.com --header "X-API-Key: secret123"
   vulnscan https://target.com --burp-request saved_request.txt
 
-{Colors.CYAN}Available Modules (15):{Colors.RESET}
+{Colors.CYAN}Available Modules (16):{Colors.RESET}
   tech      - Technology fingerprinting & CVE detection
   headers   - Security headers analysis
   info      - Information disclosure & sensitive files
@@ -1218,6 +1335,7 @@ def main():
   cors      - CORS misconfiguration detection
   waf       - WAF detection & bypass testing
   api       - API security (GraphQL, REST, BOLA)
+  idor      - IDOR/Insecure Direct Object Reference (file/data exposure)
   crawl     - Web crawler & endpoint discovery
   dirs      - Directory & file discovery (slow)
   ports     - Port scanning & service detection (slow)
@@ -1234,6 +1352,7 @@ def main():
   --full        - Include all modules (dirs, ports)
   --ai          - Enable AI-powered verification & discovery
   --extensive   - AI-guided full attack lifecycle (recon+scan+AI analysis)
+  --fix         - Generate AI-powered fix proposals for each finding
   --report-html - Generate HTML report alongside JSON
 
 {Colors.CYAN}Safety Controls:{Colors.RESET}
@@ -1262,8 +1381,12 @@ def main():
     parser.add_argument('--full', '-f', action='store_true', help='Run all modules including heavy scans')
     parser.add_argument('--ai', '-a', action='store_true', help='Enable AI-powered verification & discovery')
     parser.add_argument('--ai-key', help='Anthropic API key (or set ANTHROPIC_API_KEY env var)')
+    parser.add_argument('--ai-limit', type=int, default=10,
+                        help='Max findings to analyze with AI (default: 10, saves time and tokens)')
     parser.add_argument('--extensive', '-e', action='store_true',
                         help='AI-guided full attack lifecycle (recon → mapping → scanning → AI analysis → report)')
+    parser.add_argument('--fix', action='store_true',
+                        help='Generate AI-powered fix proposals for each finding')
     parser.add_argument('--report-html', action='store_true', help='Generate HTML report')
     parser.add_argument('--crawl', action='store_true', help='Crawl target to discover endpoints before scanning')
     parser.add_argument('--crawl-depth', type=int, default=3, help='Maximum crawl depth (default: 3)')
@@ -1280,8 +1403,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Auto-enable AI mode if key is provided
+    # Auto-enable AI mode if key is provided or --fix is used
     if args.ai_key:
+        args.ai = True
+    if args.fix:
         args.ai = True
 
     # Parse modules (profile > modules > full > default)
@@ -1337,7 +1462,8 @@ def main():
     scanner = VulnScanner(proxy=args.proxy, timeout=args.timeout, ai_api_key=args.ai_key,
                           cookies=cookies if cookies else None,
                           auth_headers=auth_headers if auth_headers else None,
-                          safety=safety)
+                          safety=safety,
+                          max_ai_findings=args.ai_limit)
     scanner._crawl_enabled = args.crawl
     scanner._crawl_depth = getattr(args, 'crawl_depth', 3)
 
@@ -1358,7 +1484,7 @@ def main():
             scanner.safety = safety
 
         try:
-            findings = scanner.extensive_scan(args.target)
+            findings = scanner.extensive_scan(args.target, fix_mode=args.fix)
         except KeyboardInterrupt:
             print(f"\n{Colors.YELLOW}Scan interrupted by user{Colors.RESET}")
             sys.exit(130)
@@ -1375,7 +1501,8 @@ def main():
     scan_start = time.time()
     try:
         findings = scanner.scan(args.target, modules=modules, quiet=args.quiet,
-                               recon_mode=args.recon, ai_mode=args.ai)
+                               recon_mode=args.recon, ai_mode=args.ai,
+                               fix_mode=args.fix)
     except KeyboardInterrupt:
         print(f"\n{Colors.YELLOW}Scan interrupted by user{Colors.RESET}")
         sys.exit(130)
@@ -1388,6 +1515,7 @@ def main():
             elapsed=scan_elapsed,
             profile=scanner.client.profile,
             chains=scanner.ai_chains,
+            fix_proposals=scanner.fix_proposals,
         )
         if html_path:
             print(f"  {Colors.GREEN}HTML report saved:{Colors.RESET} {html_path}")
