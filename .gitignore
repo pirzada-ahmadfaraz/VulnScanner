@@ -1,0 +1,41 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+.envrc
+.npmrc
+.pypirc
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.p8
+*.jks
+*.keystore
+*.kdbx
+secrets.*
+credentials.*
+
+# Generated outputs
+*.log
+vulnscan_reports/
