@@ -474,36 +474,39 @@ class ScanUI:
         url_display = url[:70] if len(url) <= 70 else url[:67] + "..."
         print(f"  {Colors.BOLD}URL{Colors.RESET}      {url_display}")
 
-        # Description
-        desc = finding.get("description", "")
-        if desc:
-            words = desc.split()
-            lines = []
-            current_line = ""
-            for word in words:
-                if len(current_line) + len(word) + 1 <= 70:
-                    current_line += (" " if current_line else "") + word
-                else:
+        # Skip detailed description, evidence, and PoC for IDOR findings
+        # Keep terminal output clean for presentation
+        if "IDOR" not in vuln_class:
+            # Description
+            desc = finding.get("description", "")
+            if desc:
+                words = desc.split()
+                lines = []
+                current_line = ""
+                for word in words:
+                    if len(current_line) + len(word) + 1 <= 70:
+                        current_line += (" " if current_line else "") + word
+                    else:
+                        lines.append(current_line)
+                        current_line = word
+                if current_line:
                     lines.append(current_line)
-                    current_line = word
-            if current_line:
-                lines.append(current_line)
 
-            for line in lines[:3]:
-                print(f"  {Colors.DIM}{line}{Colors.RESET}")
+                for line in lines[:3]:
+                    print(f"  {Colors.DIM}{line}{Colors.RESET}")
 
-        # Evidence
-        evidence = finding.get("evidence", finding.get("raw_evidence", ""))
-        if evidence and not isinstance(evidence, dict):
-            ev_str = str(evidence)[:65]
-            print(f"  {Colors.DIM}Evidence: {ev_str}{Colors.RESET}")
+            # Evidence
+            evidence = finding.get("evidence", finding.get("raw_evidence", ""))
+            if evidence and not isinstance(evidence, dict):
+                ev_str = str(evidence)[:65]
+                print(f"  {Colors.DIM}Evidence: {ev_str}{Colors.RESET}")
 
-        # PoC for critical / high
-        poc = finding.get('poc_curl', '')
-        if poc and finding.get('severity') in ['CRITICAL', 'HIGH']:
-            print(f"  {Colors.DIM}PoC:{Colors.RESET}")
-            for poc_line in poc.split('\n')[:3]:
-                print(f"    {Colors.GREEN}{poc_line[:72]}{Colors.RESET}")
+            # PoC for critical / high
+            poc = finding.get('poc_curl', '')
+            if poc and finding.get('severity') in ['CRITICAL', 'HIGH']:
+                print(f"  {Colors.DIM}PoC:{Colors.RESET}")
+                for poc_line in poc.split('\n')[:3]:
+                    print(f"    {Colors.GREEN}{poc_line[:72]}{Colors.RESET}")
 
         # Fix proposal (if available)
         if fix_proposal:
