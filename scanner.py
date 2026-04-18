@@ -48,6 +48,204 @@ from .modules.waf_bypass import WAFBypassScanner
 from .modules.api_scanner import APIScanner
 from .modules.crawler import WebCrawler
 from .modules.ai_engine import AISecurityEngine, AIFixProposal
+
+
+def generate_fixes_from_report(json_file: str, output_file: str = None, api_key: str = None):
+    """
+    Generate AI fix proposals from an existing scan report
+
+    Args:
+        json_file: Path to JSON scan report
+        output_file: Output markdown file (optional)
+        api_key: Anthropic API key (optional)
+    """
+    import json
+    from datetime import datetime
+    from .core.finding import Finding
+    from .core.http_client import AdaptiveHTTPClient
+
+    # Read JSON report
+    try:
+        with open(json_file, 'r') as f:
+            report_data = json.load(f)
+    except FileNotFoundError:
+        print(f"\n  {Colors.RED}✗ File not found: {json_file}{Colors.RESET}\n")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print(f"\n  {Colors.RED}✗ Invalid JSON file: {json_file}{Colors.RESET}\n")
+        sys.exit(1)
+
+    # Extract findings
+    findings_data = report_data.get('findings', [])
+    if not findings_data:
+        print(f"\n  {Colors.YELLOW}⚠ No findings in report{Colors.RESET}\n")
+        sys.exit(0)
+
+    # Convert to Finding objects
+    findings = []
+    for f_data in findings_data:
+        finding = Finding(
+            vuln_class=f_data['vuln_class'],
+            severity=f_data['severity'],
+            cvss=f_data['cvss'],
+            url=f_data['url'],
+            description=f_data['description'],
+            evidence=f_data.get('evidence'),
+            remediation=f_data.get('remediation'),
+            tags=f_data.get('tags', []),
+        )
+        findings.append(finding)
+
+    # Initialize AI engine
+    api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        print(f"\n  {Colors.RED}✗ ANTHROPIC_API_KEY not set{Colors.RESET}")
+        print(f"  {Colors.DIM}Set environment variable or use --ai-key{Colors.RESET}\n")
+        sys.exit(1)
+
+    client = AdaptiveHTTPClient()
+    ai_engine = AISecurityEngine(client, api_key)
+
+    if not ai_engine.is_available():
+        print(f"\n  {Colors.RED}✗ AI engine not available{Colors.RESET}\n")
+        sys.exit(1)
+
+    # Get target info
+    target = report_data.get('scan_info', {}).get('target', 'Unknown')
+    tech_context = {}
+    if 'target_profile' in report_data:
+        profile = report_data['target_profile']
+        if 'technologies' in profile:
+            tech_context['technologies'] = profile['technologies']
+        if 'waf_detected' in profile:
+            tech_context['waf'] = profile['waf_detected']
+
+    # Generate output filename
+    if not output_file:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = f"fixes_{timestamp}.md"
+
+    print(f"\n{Colors.GREEN}{'═' * 80}{Colors.RESET}")
+    print(f"{Colors.GREEN}{Colors.BOLD}AI FIX PROPOSAL GENERATOR{Colors.RESET}")
+    print(f"{Colors.GREEN}{'═' * 80}{Colors.RESET}\n")
+    print(f"  {Colors.CYAN}Source:{Colors.RESET} {json_file}")
+    print(f"  {Colors.CYAN}Target:{Colors.RESET} {target}")
+    print(f"  {Colors.CYAN}Findings:{Colors.RESET} {len(findings)}")
+    print(f"  {Colors.CYAN}Output:{Colors.RESET} {output_file}\n")
+
+    # Generate fixes
+    print(f"  {Colors.YELLOW}Generating AI fix proposals...{Colors.RESET}\n")
+
+    fix_proposals = []
+    for i, finding in enumerate(findings, 1):
+        print(f"  [{i}/{len(findings)}] {finding.vuln_class}...", end=' ', flush=True)
+        proposal = ai_engine.propose_fix(finding, tech_context)
+        fix_proposals.append(proposal)
+        print(f"{Colors.GREEN}✓{Colors.RESET}")
+
+    # Generate markdown report
+    md_content = generate_fix_markdown(report_data, findings, fix_proposals)
+
+    # Write to file
+    with open(output_file, 'w') as f:
+        f.write(md_content)
+
+    print(f"\n  {Colors.GREEN}✓ Fix proposals saved to: {output_file}{Colors.RESET}\n")
+
+
+def generate_fix_markdown(report_data: dict, findings: list, fix_proposals: list) -> str:
+    """Generate markdown report with fix proposals"""
+    from datetime import datetime
+
+    target = report_data.get('scan_info', {}).get('target', 'Unknown')
+    scan_date = report_data.get('scan_info', {}).get('scan_date', 'Unknown')
+    total_findings = len(findings)
+
+    md = f"""# AI Fix Proposals
+
+**Target:** {target}
+**Scan Date:** {scan_date}
+**Total Findings:** {total_findings}
+**Generated:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+---
+
+"""
+
+    for i, (finding, proposal) in enumerate(zip(findings, fix_proposals), 1):
+        severity_emoji = {
+            'CRITICAL': '🔴',
+            'HIGH': '🟠',
+            'MEDIUM': '🟡',
+            'LOW': '🔵',
+            'INFO': '⚪'
+        }.get(finding.severity, '⚪')
+
+        md += f"""## {i}. {severity_emoji} {finding.vuln_class}
+
+**Severity:** {finding.severity} (CVSS {finding.cvss})
+**URL:** {finding.url}
+**Priority:** {proposal.priority}
+**Effort:** {proposal.effort}
+
+### Description
+{finding.description}
+
+### Fix Summary
+{proposal.summary}
+
+"""
+
+        if proposal.code_snippets:
+            md += f"""### Code Fixes
+
+"""
+            for snippet in proposal.code_snippets:
+                filename = snippet.get('filename', 'code')
+                language = snippet.get('language', 'python')
+                code = snippet.get('code', '')
+                desc = snippet.get('description', '')
+
+                if desc:
+                    md += f"**{desc}**\n\n"
+                md += f"```{language}\n{code}\n```\n\n"
+
+        if proposal.config_changes:
+            md += f"""### Configuration Changes
+
+"""
+            for config in proposal.config_changes:
+                file = config.get('file', 'config')
+                content = config.get('content', '')
+                desc = config.get('description', '')
+
+                if desc:
+                    md += f"**{desc}**\n\n"
+                md += f"File: `{file}`\n```\n{content}\n```\n\n"
+
+        if proposal.commands:
+            md += f"""### Shell Commands
+
+```bash
+"""
+            for cmd in proposal.commands:
+                md += f"{cmd}\n"
+            md += "```\n\n"
+
+        if proposal.verify_steps:
+            md += f"""### Verification Steps
+
+"""
+            for step in proposal.verify_steps:
+                md += f"- {step}\n"
+            md += "\n"
+
+        md += "---\n\n"
+
+    return md
+
+
+
 from .modules.idor_scanner import IDORScanner
 
 
@@ -1353,7 +1551,16 @@ def main():
   --ai          - Enable AI-powered verification & discovery
   --extensive   - AI-guided full attack lifecycle (recon+scan+AI analysis)
   --fix         - Generate AI-powered fix proposals for each finding
+  --fix-report  - Generate AI fixes from existing JSON report
   --report-html - Generate HTML report alongside JSON
+
+{Colors.CYAN}Fix Generation:{Colors.RESET}
+  {Colors.GREEN}# During scan{Colors.RESET}
+  vulnscan https://target.com --ai --fix
+
+  {Colors.GREEN}# From existing report{Colors.RESET}
+  vulnscan --fix-report scan_report.json
+  vulnscan --fix-report scan_report.json --fix-output my_fixes.md
 
 {Colors.CYAN}Safety Controls:{Colors.RESET}
   --rate-limit N  - Max N requests per second (0 = unlimited)
@@ -1369,7 +1576,7 @@ def main():
         """
     )
 
-    parser.add_argument('target', help='Target URL to scan')
+    parser.add_argument('target', nargs='?', help='Target URL to scan (not required with --fix-report)')
     parser.add_argument('--proxy', '-p', help='Proxy URL (e.g., http://127.0.0.1:8080 for Burp)')
     parser.add_argument('--modules', '-m', help='Comma-separated list of modules to run')
     parser.add_argument('--timeout', '-t', type=int, default=15, help='Request timeout in seconds')
@@ -1387,6 +1594,10 @@ def main():
                         help='AI-guided full attack lifecycle (recon → mapping → scanning → AI analysis → report)')
     parser.add_argument('--fix', action='store_true',
                         help='Generate AI-powered fix proposals for each finding')
+    parser.add_argument('--fix-report', metavar='JSON_FILE',
+                        help='Generate AI fix proposals from existing scan report (JSON file)')
+    parser.add_argument('--fix-output', metavar='MD_FILE',
+                        help='Output file for fix proposals (default: fixes_<timestamp>.md)')
     parser.add_argument('--report-html', action='store_true', help='Generate HTML report')
     parser.add_argument('--crawl', action='store_true', help='Crawl target to discover endpoints before scanning')
     parser.add_argument('--crawl-depth', type=int, default=3, help='Maximum crawl depth (default: 3)')
@@ -1402,6 +1613,15 @@ def main():
     parser.add_argument('--burp-request', help='Path to Burp Suite saved request file')
 
     args = parser.parse_args()
+
+    # Handle --fix-report mode (generate fixes from existing JSON report)
+    if args.fix_report:
+        generate_fixes_from_report(args.fix_report, args.fix_output, args.ai_key)
+        return
+
+    # Validate target is provided for normal scan
+    if not args.target:
+        parser.error("target is required (unless using --fix-report)")
 
     # Auto-enable AI mode if key is provided or --fix is used
     if args.ai_key:
