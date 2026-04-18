@@ -222,7 +222,7 @@ class IDORScanner:
                                         ))
 
                                         if callback:
-                                            callback("success", f"CRITICAL IDOR found: {file_type} exposure")
+                                            callback("success", "IDOR vulnerability detected")
 
                                         return  # Found critical IDOR, stop testing
 
@@ -300,7 +300,7 @@ class IDORScanner:
                             ))
 
                             if callback:
-                                callback("success", f"IDOR found: {endpoint}")
+                                callback("success", "IDOR vulnerability detected")
 
                             return  # Found IDOR, no need to test more
 
@@ -458,7 +458,7 @@ class IDORScanner:
                             ))
 
                             if callback:
-                                callback("success", f"CRITICAL IDOR found: {file_type} exposure")
+                                callback("success", "IDOR vulnerability detected")
 
                             return  # Found critical IDOR
 
