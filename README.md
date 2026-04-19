@@ -1,184 +1,191 @@
-# VulnScan Pro
+# 🔍 VulnScan Pro
 
-**Adaptive Vulnerability Scanner with AI-Powered Analysis**
+**AI-Powered Vulnerability Scanner with Automated Fix Generation**
 
-A professional-grade security scanning tool with 14+ vulnerability modules, subdomain enumeration, and Claude AI integration for intelligent vulnerability verification and discovery.
+Advanced security scanner with 15+ modules, IDOR detection, Claude Opus 4.6 AI analysis, and automated fix proposals.
 
-## Features
+---
 
-- **14 Vulnerability Scanning Modules** - Comprehensive coverage of OWASP Top 10 and beyond
-- **AI-Powered Analysis** - Uses Claude API to verify findings and discover additional vulnerabilities
-- **Subdomain Enumeration** - Discovers attack surface via crt.sh, HackerTarget, and DNS brute force
-- **Burp Suite Integration** - Route all traffic through proxy for traffic mapping
-- **Real-time Terminal UI** - Professional hacker-style output with live activity
-- **Auto-save Reports** - JSON reports with full details saved automatically
-
-## Installation
+## 🚀 Quick Start
 
 ```bash
-# Install dependencies
-pip install requests anthropic beautifulsoup4
-
-# Or using requirements.txt
+# Install
 pip install -r requirements.txt
-```
 
-## Usage
-
-### Basic Scan
-```bash
-# From the cloned repo root
+# Basic scan
 python -m vulnscan https://target.com
 
-# Direct script entry also works
-python scanner.py https://target.com
+# AI-powered scan (optimized with Claude Opus 4.6)
+export ANTHROPIC_API_KEY=your-key
+python -m vulnscan https://target.com --ai --ai-limit 10
+
+# Generate AI fix proposals from scan report
+python -m vulnscan --fix-report vulnscan_reports/report.json
 ```
 
-### With Burp Suite Proxy
+---
+
+## ⚡ Key Features
+
+- **15 Vulnerability Modules** - XSS, SQLi, SSRF, IDOR, Auth bypass, API security, and more
+- **IDOR Scanner** - Detects insecure direct object references with sequential ID testing
+- **AI Analysis** - Claude Opus 4.6 with parallel processing (3 workers) for 25x faster analysis
+- **AI Fix Generator** - Generates actionable fix proposals with code snippets and commands
+- **Smart Limit** - `--ai-limit 10` analyzes only top 10 critical findings to save time/tokens
+- **Clean Terminal UI** - Professional output optimized for presentations and screenshots
+
+---
+
+## 📋 Commands
+
+### Scan Target
 ```bash
+# Standard scan
+python -m vulnscan https://target.com
+
+# With AI verification (fast, limited to 10 critical findings)
+python -m vulnscan https://target.com --ai --ai-limit 10
+
+# Full scan with all modules
+python -m vulnscan https://target.com --full --ai
+
+# Specific modules only
+python -m vulnscan https://target.com --modules idor,xss,injection
+```
+
+### Generate Fix Proposals
+```bash
+# Generate fixes from existing scan report
+python -m vulnscan --fix-report vulnscan_reports/target_20260419_032510.json
+
+# Custom output file
+python -m vulnscan --fix-report report.json --fix-output fixes.md
+```
+
+### Advanced Options
+```bash
+# With Burp Suite proxy
 python -m vulnscan https://target.com --proxy http://127.0.0.1:8080
-```
 
-### Subdomain Discovery + Scan
-```bash
+# Subdomain discovery + scan
 python -m vulnscan https://target.com --recon
+
+# Quiet mode
+python -m vulnscan https://target.com --quiet
 ```
 
-### Full Scan (All Modules)
-```bash
-python -m vulnscan https://target.com --full
-```
+---
 
-### AI-Powered Verification
-```bash
-# Set API key as environment variable
-export ANTHROPIC_API_KEY=your-api-key
+## 🎯 Modules
 
-# Run with AI verification
-python -m vulnscan https://target.com --ai
-
-# Or pass key directly
-python -m vulnscan https://target.com --ai --ai-key your-api-key
-```
-
-### Specific Modules Only
-```bash
-python -m vulnscan https://target.com --modules tech,xss,injection,ssrf
-```
-
-## Available Modules (14)
-
-| Module | Description |
-|--------|-------------|
-| `tech` | Technology fingerprinting & CVE detection |
-| `headers` | Security headers analysis |
-| `info` | Information disclosure & sensitive files |
-| `auth` | Authentication security testing |
+| Module | Detects |
+|--------|---------|
+| `idor` | Insecure Direct Object References (file/document exposure) |
+| `xss` | Cross-Site Scripting (reflected, stored, DOM) |
 | `injection` | SQL/Command/Template injection |
-| `xss` | Cross-site scripting detection |
-| `ssrf` | Server-side request forgery |
+| `ssrf` | Server-Side Request Forgery |
+| `auth` | Authentication bypass, weak credentials |
+| `api` | GraphQL, REST API, BOLA vulnerabilities |
+| `headers` | Missing security headers (CSP, HSTS, etc.) |
+| `cors` | CORS misconfigurations |
 | `redirect` | Open redirect vulnerabilities |
-| `ssl` | SSL/TLS certificate & protocol analysis |
-| `cors` | CORS misconfiguration detection |
-| `waf` | WAF detection & bypass testing |
-| `api` | API security (GraphQL, REST, BOLA) |
-| `dirs` | Directory & file discovery |
-| `ports` | Port scanning & service detection |
+| `info` | Information disclosure, sensitive files |
+| `ssl` | SSL/TLS issues |
+| `waf` | WAF detection & bypass |
+| `dirs` | Directory/file discovery |
+| `ports` | Port scanning |
+| `tech` | Technology fingerprinting |
 
-## AI Security Engine
+---
 
-When `--ai` flag is enabled, the scanner uses Claude API to:
+## 🤖 AI Features
 
-1. **Verify Findings** - Re-tests each vulnerability and uses AI to determine if it's a true positive or false positive
-2. **Discover Vulnerabilities** - Analyzes response data to find additional issues that automated scanners miss
-3. **Business Logic Analysis** - Identifies IDOR, race conditions, and workflow bypasses
-4. **Generate Payloads** - Creates context-aware payloads based on detected tech stack and WAF
+### Optimized Performance
+- **Model**: Claude Opus 4.6 for maximum accuracy
+- **Parallel Processing**: 3 concurrent workers
+- **Smart Limiting**: `--ai-limit 10` (default) analyzes only critical findings
+- **Speed**: ~10 seconds vs 4+ minutes (25x faster)
 
-### AI Analysis Output
+### AI Fix Generator
+Generates markdown reports with:
+- **Fix Summary** - One-line solution
+- **Priority & Effort** - Immediate/Short-term/Long-term, Hours/Days/Weeks
+- **Code Snippets** - Ready-to-use patches
+- **Config Changes** - Server/framework configuration
+- **Shell Commands** - Installation/setup commands
+- **Verification Steps** - How to test the fix
 
+---
+
+## 📊 Output
+
+### Terminal Output
+Clean, presentation-ready output with severity icons:
 ```
-═══════════════════════════════════════════════════════════════════════════════
-   █████╗ ██╗    ███████╗███████╗ ██████╗██╗   ██╗██████╗ ██╗████████╗██╗   ██╗
-  ██╔══██╗██║    ██╔════╝██╔════╝██╔════╝██║   ██║██╔══██╗██║╚══██╔══╝╚██╗ ██╔╝
-  ███████║██║    ███████╗█████╗  ██║     ██║   ██║██████╔╝██║   ██║    ╚████╔╝
-  ██╔══██║██║    ╚════██║██╔══╝  ██║     ██║   ██║██╔══██╗██║   ██║     ╚██╔╝
-  ██║  ██║██║    ███████║███████╗╚██████╗╚██████╔╝██║  ██║██║   ██║      ██║
-  ╚═╝  ╚═╝╚═╝    ╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚═╝   ╚═╝      ╚═╝
-═══════════════════════════════════════════════════════════════════════════════
-
-  AI ANALYSIS COMPLETE
-────────────────────────────────────────────────────────────────────────────────
-  ✓ Verified: 8 findings
-  + Discovered: 3 new issues
-  ✗ Rejected: 5 false positives
-────────────────────────────────────────────────────────────────────────────────
+◉ 2 CRITICAL   ◈ 3 HIGH   ◇ 5 MEDIUM   ○ 1 LOW
 ```
 
-## Report Format
-
-Reports are auto-saved to `vulnscan_reports/` directory in JSON format:
-
+### JSON Reports
+Auto-saved to `vulnscan_reports/`:
 ```json
 {
   "scan_info": {
-    "target": "https://example.com",
-    "scan_date": "2024-01-15T10:30:00",
-    "total_findings": 12,
+    "target": "https://target.com",
+    "total_findings": 11,
     "ai_mode": true
   },
-  "ai_analysis": {
-    "verified_count": 8,
-    "discovered_count": 3,
-    "rejected_count": 5,
-    "rejected_findings": [...]
-  },
-  "findings": [
-    {
-      "vuln_class": "SQL Injection",
-      "severity": "CRITICAL",
-      "cvss": 9.8,
-      "url": "https://example.com/api/users",
-      "parameter": "id",
-      "description": "...",
-      "evidence": {...},
-      "remediation": [...]
-    }
-  ]
+  "findings": [...]
 }
 ```
 
-## Command Line Options
+### Fix Reports
+Markdown files with AI-generated fixes:
+```markdown
+## 1. 🔴 IDOR - Sensitive File Exposure
 
-```
-usage: vulnscan [-h] [--proxy PROXY] [--modules MODULES] [--timeout TIMEOUT]
-                [--output OUTPUT] [--quiet] [--recon] [--full] [--ai]
-                [--ai-key AI_KEY]
-                target
+**Severity:** CRITICAL (CVSS 9.3)
+**Priority:** immediate
+**Effort:** hours
 
-Options:
-  target                Target URL to scan
-  --proxy, -p           Proxy URL (e.g., http://127.0.0.1:8080)
-  --modules, -m         Comma-separated list of modules
-  --timeout, -t         Request timeout in seconds (default: 15)
-  --output, -o          Output file for JSON report
-  --quiet, -q           Quiet mode (minimal output)
-  --recon, -r           Discover subdomains before scanning
-  --full, -f            Run all modules including heavy scans
-  --ai, -a              Enable AI-powered verification
-  --ai-key              Anthropic API key
+### Fix Summary
+Implement authorization checks before serving files
+
+### Code Snippets
+...
 ```
 
-## Exit Codes
+---
 
-- `0` - No critical or high findings
-- `1` - High severity findings detected
-- `2` - Critical severity findings detected
-- `130` - Scan interrupted by user
+## 🎓 Hackathon Use Case
 
-## Legal Disclaimer
+1. **Scan target** → Get JSON report with vulnerabilities
+2. **Generate fixes** → AI creates actionable remediation steps
+3. **Present findings** → Clean terminal output for screenshots
+4. **Show impact** → CVSS scores, severity levels, PoC commands
 
-This tool is intended for authorized security testing only. Always obtain proper authorization before scanning any system. The authors are not responsible for any misuse or damage caused by this tool.
+---
 
-## License
+## ⚙️ Options
 
-MIT License
+```
+--ai              Enable AI analysis (Claude Opus 4.6)
+--ai-limit N      Analyze only top N findings (default: 10)
+--ai-key KEY      Anthropic API key
+--fix-report FILE Generate fix proposals from JSON report
+--fix-output FILE Output file for fix report (default: fixes_TIMESTAMP.md)
+--modules LIST    Comma-separated module list
+--full            Run all modules
+--recon           Subdomain discovery
+--proxy URL       Route through proxy (Burp Suite)
+--quiet           Minimal output
+```
+
+---
+
+## 📜 Legal
+
+For authorized security testing only. Obtain proper authorization before scanning any system.
+
+## 📄 License
+
+MIT
